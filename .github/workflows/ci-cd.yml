@@ -1,0 +1,44 @@
+name: Database Backup
+
+on:
+  schedule:
+    - cron: '0 0 * * *' # Daily at midnight UTC
+  workflow_dispatch: # Allow manual trigger
+
+jobs:
+  backup:
+    runs-on: self-hosted
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build Backup Image
+        run: |
+          docker build -t withershins-db-backup -f Dockerfile .
+
+      - name: Run Backup
+        env:
+          DB_HOST: ${{ secrets.DB_HOST || '192.168.1.251' }}
+          DB_PORT: ${{ secrets.DB_PORT || '5432' }}
+          DB_NAME: ${{ secrets.DB_NAME || 'delirium' }}
+          DB_USER: ${{ secrets.DB_USER || 'alpha_user' }}
+          PGPASSWORD: ${{ secrets.DB_PASSWORD || 'somedazethedragonwins' }}
+        run: |
+          mkdir -p ./backups
+          docker run --rm \
+            -e DB_HOST=$DB_HOST \
+            -e DB_PORT=$DB_PORT \
+            -e DB_NAME=$DB_NAME \
+            -e DB_USER=$DB_USER \
+            -e PGPASSWORD=$PGPASSWORD \
+            -e BACKUP_DIR=/tmp \
+            -v $(pwd)/backups:/tmp \
+            withershins-db-backup
+
+      - name: Upload Backup Artifact
+        uses: actions/upload-artifact@v4
+        continue-on-error: true
+        with:
+          name: db-backup
+          path: backups/
+          retention-days: 2
