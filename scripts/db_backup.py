@@ -50,14 +50,19 @@ def run_backup():
 
     LOG.info(f"Starting backup of database {db_name} at {db_host}:{db_port}")
     
+    # Default to stock_data schema where Withershins tables reside, or full DB if specified
+    backup_schema = os.environ.get("DB_SCHEMA", "stock_data")
+    
     pg_dump_cmd = [
         "pg_dump",
         "-h", db_host,
         "-p", db_port,
         "-U", db_user,
         "-d", db_name,
-        "-F", "c"  # Custom format (compressed by default, but we'll gzip it anyway or let pg_restore handle it. pg_dump -F c is already compressed)
+        "-F", "c"  # Custom format (compressed by default)
     ]
+    if backup_schema and backup_schema.lower() != "all":
+        pg_dump_cmd.extend(["-n", backup_schema])
     
     # Actually, pg_dump -F c produces a compressed binary format natively, no need to pipe to gzip.
     # We will output directly to the backup_file (without .gz, we'll use .dump)
