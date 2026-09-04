@@ -1,44 +1,50 @@
-name: Database Backup
+name: CI/CD Pipeline
 
 on:
-  schedule:
-    - cron: '0 0 * * *' # Daily at midnight UTC
-  workflow_dispatch: # Allow manual trigger
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
 
 jobs:
-  backup:
+  build-test-push:
+    name: Build, Test, and Push
     runs-on: self-hosted
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      REGISTRY_PORT: "31482"
     steps:
-      - name: Checkout code
+      - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Build Backup Image
-        run: |
-          docker build -t withershins-db-backup -f Dockerfile .
-
-      - name: Run Backup
-        env:
-          DB_HOST: ${{ secrets.DB_HOST || '192.168.1.251' }}
-          DB_PORT: ${{ secrets.DB_PORT || '5432' }}
-          DB_NAME: ${{ secrets.DB_NAME || 'delirium' }}
-          DB_USER: ${{ secrets.DB_USER || 'alpha_user' }}
-          PGPASSWORD: ${{ secrets.DB_PASSWORD || 'somedazethedragonwins' }}
-        run: |
-          mkdir -p ./backups
-          docker run --rm \
-            -e DB_HOST=$DB_HOST \
-            -e DB_PORT=$DB_PORT \
-            -e DB_NAME=$DB_NAME \
-            -e DB_USER=$DB_USER \
-            -e PGPASSWORD=$PGPASSWORD \
-            -e BACKUP_DIR=/tmp \
-            -v $(pwd)/backups:/tmp \
-            withershins-db-backup
-
-      - name: Upload Backup Artifact
-        uses: actions/upload-artifact@v4
-        continue-on-error: true
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          name: db-backup
-          path: backups/
-          retention-days: 2
+          python-version: "3.12"
+
+      - name: Run Unit Tests
+        run: |
+          pip install pytest pytest-cov
+          pytest tests -v --cov=scripts --cov-report=term-missing --cov-fail-under=85
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: |
+            image=registry.withershins.local:31482/moby/buildkit:buildx-stable-1
+            network=host
+          buildkitd-config-inline: |
+            [registry."registry.withershins.local:31482"]
+              insecure = true
+
+      - name: Build and Push Image
+        if: success() && github.event_name == 'push'
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          network: host
+          platforms: linux/amd64
+          push: true
+          tags: |
+            registry.withershins.local:${{ env.REGISTRY_PORT }}/withershins-db-backup:latest
+            registry.withershins.local:${{ env.REGISTRY_PORT }}/withershins-db-backup:${{ github.run_id }}
