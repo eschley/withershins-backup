@@ -135,6 +135,60 @@ class TestVerifyBackup(unittest.TestCase):
         mock_discord.assert_called_once()
         self.assertIn("FAILED", mock_discord.call_args[1]["title"])
 
+    @patch.dict(os.environ, {"BACKUP_DIR": "/tmp/test_backup"})
+    @patch("glob.glob", return_value=["/tmp/test_backup/withershins_db_20260904_070003.dump"])
+    @patch("os.path.getmtime", return_value=12345)
+    @patch("os.path.getsize", return_value=1024 * 1024 * 100)
+    @patch("subprocess.run", side_effect=subprocess.CalledProcessError(1, ["pg_restore"], stderr=b"Corrupt header"))
+    @patch("verify_backup.send_discord_notification")
+    def test_verify_latest_backup_called_process_error(self, mock_discord, mock_subproc, mock_getsize, mock_getmtime, mock_glob):
+        res = verify_backup.verify_latest_backup()
+        self.assertFalse(res)
+        mock_discord.assert_called_once()
+        self.assertIn("FAILED", mock_discord.call_args[1]["title"])
+
+    @patch.dict(os.environ, {
+        "DB_PASSWORD": "",
+        "DB_HOST": "localhost"
+    })
+    def test_run_backup_missing_password(self):
+        with self.assertRaises(SystemExit) as cm:
+            db_backup.run_backup()
+        self.assertEqual(cm.exception.code, 1)
+
+    @patch.dict(os.environ, {
+        "DB_PASSWORD": "secret_password",
+        "DB_HOST": "localhost",
+        "BACKUP_DIR": "/tmp/test_backup",
+        "RETENTION_DAYS": "7"
+    })
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("os.path.getsize", return_value=1024 * 1024 * 10)
+    @patch("glob.glob", return_value=["/tmp/test_backup/old.dump"])
+    @patch("os.path.getmtime", return_value=0)  # Very old file
+    @patch("os.remove")
+    @patch("subprocess.run")
+    @patch("db_backup.send_discord_notification")
+    def test_run_backup_rotation_cleanup(self, mock_discord, mock_subproc, mock_remove, mock_getmtime, mock_glob, mock_getsize, mock_file):
+        mock_subproc.return_value = MagicMock(returncode=0)
+        db_backup.run_backup()
+        mock_remove.assert_called_once_with("/tmp/test_backup/old.dump")
+
+    @patch.dict(os.environ, {
+        "DB_PASSWORD": "secret_password",
+        "DB_HOST": "localhost",
+        "BACKUP_DIR": "/tmp/test_backup"
+    })
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("subprocess.run", side_effect=subprocess.CalledProcessError(1, ["pg_dump"], stderr=b"Authentication failed"))
+    @patch("db_backup.send_discord_notification")
+    def test_run_backup_failure_alert(self, mock_discord, mock_subproc, mock_file):
+        with self.assertRaises(SystemExit) as cm:
+            db_backup.run_backup()
+        self.assertEqual(cm.exception.code, 1)
+        mock_discord.assert_called_once()
+        self.assertIn("FAILED", mock_discord.call_args[1]["title"])
+
 
 if __name__ == "__main__":
     unittest.main()
